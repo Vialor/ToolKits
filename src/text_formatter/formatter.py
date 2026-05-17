@@ -12,6 +12,8 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 import tkinter.messagebox as messagebox
 
+import sys
+from pathlib import Path
 import json
 import ast
 import pprint
@@ -35,7 +37,10 @@ class Application(ttk.Frame):
 
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.container.rowconfigure(5, weight=1)
+        # row=0 是可伸缩的主内容区；row=1 是按钮区；row=2 是状态栏
+        self.container.rowconfigure(0, weight=1)
+        self.container.rowconfigure(1, weight=0)
+        self.container.rowconfigure(2, weight=0)
         self.container.columnconfigure(0, weight=1)
         
         self.statusVar = StringVar(value="Ready")
@@ -78,21 +83,33 @@ class Application(ttk.Frame):
         widget.bind("<Leave>", lambda e: self.statusVar.set("Ready"), add="+")
 
     def _createWidgets(self):
-        # Input
-        ttk.Label(self.container, text="Input").grid(row=0, column=0, sticky="w")
-        self.textInput = ScrolledText(self.container, width=60, height=10, wrap="word")
-        self.textInput.grid(row=1, column=0, sticky="nsew", pady=(4, 10))
-        self.rowconfigure(1, weight=1)
+        # Text area: PanedWindow 让 Input / Output 随窗口变大，并支持拖动中间分隔条调节高度
+        textPane = ttk.PanedWindow(self.container, orient=VERTICAL)
+        textPane.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
-        # Output
-        ttk.Label(self.container, text="Output").grid(row=2, column=0, sticky="w")
-        self.textOutput = ScrolledText(self.container, width=60, height=10, wrap="word")
-        self.textOutput.grid(row=3, column=0, sticky="nsew", pady=(4, 10))
-        self.rowconfigure(3, weight=1)
-                
+        inputFrame = ttk.Frame(textPane)
+        inputFrame.rowconfigure(1, weight=1)
+        inputFrame.columnconfigure(0, weight=1)
+
+        ttk.Label(inputFrame, text="Input").grid(row=0, column=0, sticky="w")
+        self.textInput = ScrolledText(inputFrame, width=60, height=10, wrap="word")
+        self.textInput.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        outputFrame = ttk.Frame(textPane)
+        outputFrame.rowconfigure(1, weight=1)
+        outputFrame.columnconfigure(0, weight=1)
+
+        ttk.Label(outputFrame, text="Output").grid(row=0, column=0, sticky="w")
+        self.textOutput = ScrolledText(outputFrame, width=60, height=10, wrap="word")
+        self.textOutput.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        # weight 表示窗口 resize 时上下两个 pane 都参与伸缩
+        textPane.add(inputFrame, weight=1)
+        textPane.add(outputFrame, weight=1)
+
         # Buttons
         btnFrame = ttk.Frame(self.container)
-        btnFrame.grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        btnFrame.grid(row=1, column=0, sticky="ew", pady=(0, 2))
 
         for i in range(6):
             btnFrame.columnconfigure(i, weight=1)
@@ -196,10 +213,43 @@ class Application(ttk.Frame):
             btnFormatByBrackets,
             "根据 [] {} () 自动缩进；忽略字符串内部括号；可处理未知格式的数据，甚至是括号缺失的情况。"
         )
+
+        btnUnicodeToText = ttk.Button(
+            btnFrame,
+            text="unicode → text",
+            command=self.safe(self.unicodeToText)
+        )
+        btnUnicodeToText.grid(row=1, column=3, sticky="ew", padx=4)
+        self._bindStatusHint(
+            btnUnicodeToText,
+            r"把 Unicode escape 转成可读文本，例如 \u4f60\u597d → 你好"
+        )
+
+        btnReplaceText = ttk.Button(
+            btnFrame,
+            text="replace text",
+            command=self.safe(self.replaceText)
+        )
+        btnReplaceText.grid(row=1, column=4, sticky="ew", padx=4)
+        self._bindStatusHint(
+            btnReplaceText,
+            "读取当前程序所在文件夹的 replace_mapping.yaml，把输入文本中的 key 替换为 value"
+        )
+
+        btnRestoreText = ttk.Button(
+            btnFrame,
+            text="restore text",
+            command=self.safe(self.restoreText)
+        )
+        btnRestoreText.grid(row=1, column=5, sticky="ew", padx=4)
+        self._bindStatusHint(
+            btnRestoreText,
+            "按 replace_mapping.yaml 反向恢复：把 value 替换回第一个对应的 key"
+        )
                 
         # Status Bar
         statusFrame = ttk.Frame(self.container)
-        statusFrame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        statusFrame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         statusFrame.columnconfigure(0, weight=1)
 
         statusLabel = ttk.Label(
@@ -212,6 +262,15 @@ class Application(ttk.Frame):
     def setOutput(self, text):
         self.textOutput.delete("1.0", END)
         self.textOutput.insert(END, text)
+
+    def getAppDir(self) -> Path:
+        """
+        Return the folder containing the running executable when packaged,
+        otherwise the folder containing this .py file.
+        """
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent
+        return Path(__file__).resolve().parent
     
     def getInput(self) -> str:
         s = self.textInput.get("1.0", "end-1c").strip()
@@ -446,6 +505,84 @@ class Application(ttk.Frame):
         formatted = "\n".join(line.rstrip() for line in formatted.splitlines()).strip()
         self.setOutput(formatted)
     
+    def loadReplaceMapping(self) -> dict:
+        mapping_path = self.getAppDir() / "replace_mapping.yaml"
+        if not mapping_path.exists():
+            raise FileNotFoundError(f"replace_mapping.yaml not found: {mapping_path}")
+
+        with mapping_path.open("r", encoding="utf-8") as f:
+            mapping = yaml.safe_load(f)
+
+        if mapping is None:
+            raise ValueError("replace_mapping.yaml is empty")
+        if not isinstance(mapping, dict):
+            raise ValueError("replace_mapping.yaml must be a YAML mapping/object")
+
+        return mapping
+
+    def replaceText(self):
+        s = self.getInput()
+        mapping = self.loadReplaceMapping()
+
+        result = s
+        for key, value in mapping.items():
+            if key is None:
+                continue
+            key = str(key)
+            if key == "":
+                continue
+            value = "" if value is None else str(value)
+            result = result.replace(key, value)
+
+        self.setOutput(result)
+
+    def restoreText(self):
+        s = self.getInput()
+        mapping = self.loadReplaceMapping()
+
+        reverse_mapping = {}
+        for key, value in mapping.items():
+            if key is None:
+                continue
+
+            key = str(key)
+            if key == "":
+                continue
+
+            value = "" if value is None else str(value)
+            if value == "":
+                continue
+
+            # 多个 key 对应同一个 value 时，保留 YAML 中最先出现的 key
+            if value not in reverse_mapping:
+                reverse_mapping[value] = key
+
+        result = s
+        for value, key in reverse_mapping.items():
+            result = result.replace(value, key)
+
+        self.setOutput(result)
+
+    def unicodeToText(self):
+        # \u4f60\u597d
+        s = self.getInput()
+        try:
+            # 如果输入是带引号的字符串，优先按 Python 字符串字面量解析
+            if (
+                (s.startswith('"') and s.endswith('"')) or
+                (s.startswith("'") and s.endswith("'"))
+            ):
+                result = ast.literal_eval(s)
+                if not isinstance(result, str):
+                    raise ValueError("Input must be a string")
+            else:
+                # 不带引号时，按 unicode_escape 解码
+                result = s.encode("utf-8").decode("unicode_escape")
+
+        except Exception as e:
+            raise ValueError(f"Failed to decode unicode text: {e}")
+
+        self.setOutput(result)
 
 if __name__ == "__main__":
     root = Tk()

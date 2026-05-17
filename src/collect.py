@@ -15,7 +15,7 @@ import sys
 # Windows 示例：r"D:\collect_result"
 # Git Bash 示例：r"/d/collect_result"
 # Linux 示例："/home/me/collect_result"
-DEST_ROOT = r"/path/to/collect_result"
+DEST_ROOT = r""
 
 # 收集动作：
 # "copy" 表示复制
@@ -23,7 +23,7 @@ DEST_ROOT = r"/path/to/collect_result"
 ACTION = "copy"
 
 # 当目标文件已存在时是否覆盖
-OVERWRITE = True
+OVERWRITE = False
 
 # 是否递归搜索 ROOT 下的所有子目录
 RECURSIVE = True
@@ -42,30 +42,37 @@ IGNORE_CASE = True
 #   "dir" 只收集文件夹
 #   "both" 文件和文件夹都收集
 COLLECT_MAP = {
-    "images": [
+    # "images": [
+    #     {
+    #         "ROOT": r"D:\data\project",
+    #         "PATTERN": r".*\.(jpg|jpeg|png|gif)$",
+    #         "TARGET": "file",
+    #     },
+    #     {
+    #         "ROOT": r"/home/me/pictures",
+    #         "PATTERN": r"^avatar_.*\.webp$",
+    #         "TARGET": "file",
+    #     },
+    # ],
+    # "logs": [
+    #     {
+    #         "ROOT": r"/var/log",
+    #         "PATTERN": r".*\.log$",
+    #         "TARGET": "file",
+    #     },
+    # ],
+    "Thai": [
         {
-            "ROOT": r"D:\data\project",
-            "PATTERN": r".*\.(jpg|jpeg|png|gif)$",
-            "TARGET": "file",
-        },
-        {
-            "ROOT": r"/home/me/pictures",
-            "PATTERN": r"^avatar_.*\.webp$",
-            "TARGET": "file",
+            "ROOT": r"",
+            "PATTERN": r".*",
+            "TARGET": "both",
         },
     ],
-    "logs": [
+    "Arge": [
         {
-            "ROOT": r"/var/log",
-            "PATTERN": r".*\.log$",
-            "TARGET": "file",
-        },
-    ],
-    "backup_dirs": [
-        {
-            "ROOT": r"D:\workspace",
-            "PATTERN": r".*backup.*",
-            "TARGET": "dir",
+            "ROOT": r"",
+            "PATTERN": r".*",
+            "TARGET": "both",
         },
     ],
 }
@@ -167,16 +174,32 @@ def resolve_conflict(target_path: Path, overwrite: bool) -> Path:
             return candidate
         index += 1
 
+def prepare_rule_dest_root(dest_root: Path, folder_name: str, overwrite: bool) -> Path:
+    target_root = dest_root / folder_name
+
+    if overwrite:
+        if target_root.exists():
+            if target_root.is_dir():
+                shutil.rmtree(target_root)
+            else:
+                target_root.unlink()
+        target_root.mkdir(parents=True, exist_ok=True)
+        return target_root
+
+    target_root = resolve_conflict(target_root, overwrite=False)
+    target_root.mkdir(parents=True, exist_ok=True)
+    return target_root
 
 def copy_item(source: Path, target: Path, overwrite: bool) -> Path:
-    target = resolve_conflict(target, overwrite)
+    """
+    复制单个文件或创建单个目录。
+    注意：冲突只在 ROOT 目标目录层处理。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
 
     if source.is_dir():
-        if target.exists() and overwrite:
-            shutil.rmtree(target)
-        shutil.copytree(source, target)
+        target.mkdir(parents=True, exist_ok=True)
     else:
-        target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() and overwrite:
             target.unlink()
         shutil.copy2(source, target)
@@ -185,7 +208,11 @@ def copy_item(source: Path, target: Path, overwrite: bool) -> Path:
 
 
 def move_item(source: Path, target: Path, overwrite: bool) -> Path:
-    target = resolve_conflict(target, overwrite)
+    """
+    移动单个文件或目录。
+    注意：冲突只在 ROOT 目标目录层处理。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
 
     if target.exists() and overwrite:
         if target.is_dir():
@@ -193,9 +220,7 @@ def move_item(source: Path, target: Path, overwrite: bool) -> Path:
         else:
             target.unlink()
 
-    target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
-
     return target
 
 
@@ -265,7 +290,6 @@ def validate_rule_root(root_str: str) -> Path | None:
 
     return root
 
-
 def collect_files() -> None:
     action = ensure_valid_action(ACTION)
 
@@ -275,8 +299,9 @@ def collect_files() -> None:
     regex_flags = re.IGNORECASE if IGNORE_CASE else 0
 
     for folder_name, rules in COLLECT_MAP.items():
-        dest_folder = dest_root / folder_name
-        dest_folder.mkdir(parents=True, exist_ok=True)
+        # 关键：folder_name 本身就是目标根目录名，比如 Thai / Arge
+        # 不再提前创建 dest_root / folder_name
+        rule_dest_root = prepare_rule_dest_root(dest_root, folder_name, OVERWRITE)
 
         for rule in rules:
             root_str = rule["ROOT"]
@@ -292,7 +317,8 @@ def collect_files() -> None:
                 if not match_rule(source, pattern, target_type):
                     continue
 
-                target = dest_folder / source.name
+                relative_path = source.relative_to(root)
+                target = rule_dest_root / relative_path
 
                 try:
                     if action == "copy":
@@ -303,7 +329,6 @@ def collect_files() -> None:
                         print(f"[移动] {source} -> {final_target}")
                 except Exception as exc:
                     print(f"[失败] {source}：{exc}")
-
 
 if __name__ == "__main__":
     collect_files()
